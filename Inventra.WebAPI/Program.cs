@@ -1,10 +1,11 @@
-
 using Inventra.Application.Features.Procurement.Commands;
+using Inventra.Application.Features.StockTransfer.Commands;
 using Inventra.Application.Features.StockTransfer.Validators;
 using Inventra.Application.Interfaces;
 using Inventra.Infrastructure.Persistence;
 using Inventra.Infrastructure.UnitOfWork;
 using Microsoft.EntityFrameworkCore;
+using FluentValidation;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -25,7 +26,7 @@ builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 builder.Services.AddMediatR(cfg => cfg.RegisterServicesFromAssembly(typeof(CreateProcurementCommand).Assembly));
 
 // FluentValidation
-builder.Services.AddValidatorsFromAssembly(typeof(CreateTransferRequestCommandValidator).Assembly);
+//builder.Services.AddValidatorsFromAssembly(typeof(CreateTransferRequestCommandValidator).Assembly);
 
 var app = builder.Build();
 
