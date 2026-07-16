@@ -6,18 +6,16 @@ namespace Inventra.Application.Services
 {
     public class StockTransferService
     {
-        private readonly IStockTransactionRepository _transactionRepository;
-        private readonly IProductRepository _productRepository;
+        private readonly IUnitOfWork _unitOfWork;
 
-        public StockTransferService(IStockTransactionRepository transactionRepository, IProductRepository productRepository)
+        public StockTransferService(IUnitOfWork unitOfWork)
         {
-            _transactionRepository = transactionRepository;
-            _productRepository = productRepository;
+            _unitOfWork = unitOfWork;                   
         }
 
         public async Task<StockTransaction> CreateTransferRequestAsync(StockTransferRequestDto dto)
         {
-            var product = await _productRepository.GetByIdAsync(dto.ProductId);
+            var product = await _unitOfWork.Products.GetByIdAsync(dto.ProductId);
             if (product == null)
                 throw new ArgumentException("Product not found.");
 
@@ -37,22 +35,22 @@ namespace Inventra.Application.Services
                 Status = "Pending"
             };
 
-            await _transactionRepository.AddAsync(transaction);
-            await _transactionRepository.SaveChangesAsync();
+            await _unitOfWork.StockTransactions.AddAsync(transaction);
+            await _unitOfWork.SaveChangesAsync();
 
             return transaction;
         }
 
         public async Task StartTransferAsync(Guid transactionId)
         {
-            var transaction = await _transactionRepository.GetByIdAsync(transactionId);
+            var transaction = await _unitOfWork.StockTransactions.GetByIdAsync(transactionId);
             if (transaction == null)
                 throw new ArgumentException("Transaction not found.");
 
             if (transaction.Status != "Pending")
                 throw new InvalidOperationException("Only pending transfers can be started.");
 
-            var product = await _productRepository.GetByIdAsync(transaction.ProductId);
+            var product = await _unitOfWork.Products.GetByIdAsync(transaction.ProductId);
             if (product == null)
                 throw new ArgumentException("Product not found.");
 
@@ -60,21 +58,21 @@ namespace Inventra.Application.Services
             transaction.Status = "InTransit";
             transaction.UpdatedAt = DateTime.UtcNow;
 
-            await _productRepository.UpdateAsync(product);
-            await _transactionRepository.UpdateAsync(transaction);
-            await _transactionRepository.SaveChangesAsync();
+            await _unitOfWork.Products.UpdateAsync(product);
+            await _unitOfWork.StockTransactions.UpdateAsync(transaction);
+            await _unitOfWork.SaveChangesAsync();
         }
 
         public async Task CompleteTransferAsync(StockTransferCompleteDto dto)
         {
-            var transaction = await _transactionRepository.GetByIdAsync(dto.TransactionId);
+            var transaction = await _unitOfWork.StockTransactions.GetByIdAsync(dto.TransactionId);
             if (transaction == null)
                 throw new ArgumentException("Transaction not found.");
 
             if (transaction.Status != "InTransit")
                 throw new InvalidOperationException("Only in-transit transfers can be completed.");
 
-            var product = await _productRepository.GetByIdAsync(transaction.ProductId);
+            var product = await _unitOfWork.Products.GetByIdAsync(transaction.ProductId);
             if (product == null)
                 throw new ArgumentException("Product not found.");
 
@@ -89,9 +87,9 @@ namespace Inventra.Application.Services
             transaction.Notes = dto.Notes;
             transaction.UpdatedAt = DateTime.UtcNow;
 
-            await _productRepository.UpdateAsync(product);
-            await _transactionRepository.UpdateAsync(transaction);
-            await _transactionRepository.SaveChangesAsync();
+            await _unitOfWork.Products.UpdateAsync(product);
+            await _unitOfWork.StockTransactions.UpdateAsync(transaction);
+            await _unitOfWork.SaveChangesAsync();
         }
     }
 }

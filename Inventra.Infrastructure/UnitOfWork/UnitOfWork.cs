@@ -1,4 +1,5 @@
 using Inventra.Application.Interfaces;
+using Inventra.Application.Features.StockTransfer.Validators;
 using Inventra.Domain.Entities;
 using Inventra.Infrastructure.Persistence;
 using Inventra.Infrastructure.Repositories;
@@ -49,10 +50,13 @@ namespace Inventra.Infrastructure.UnitOfWork
 
         public async Task CommitTransactionAsync()
         {
+            if (_transaction == null)
+                throw new InvalidOperationException("No active transaction to commit.");
+
             try
             {
                 await SaveChangesAsync();
-                await _transaction?.CommitAsync()!;
+                await _transaction.CommitAsync();
             }
             catch
             {
@@ -61,20 +65,23 @@ namespace Inventra.Infrastructure.UnitOfWork
             }
             finally
             {
-                await _transaction?.DisposeAsync()!;
-                _transaction = null;
+                await _transaction.DisposeAsync();
+                    _transaction = null;
             }
         }
 
         public async Task RollbackTransactionAsync()
         {
+            if (_transaction == null)
+                return;
+
             try
             {
-                await _transaction?.RollbackAsync()!;
+                await _transaction.RollbackAsync();
             }
             finally
             {
-                await _transaction?.DisposeAsync()!;
+                await _transaction.DisposeAsync();
                 _transaction = null;
             }
         }

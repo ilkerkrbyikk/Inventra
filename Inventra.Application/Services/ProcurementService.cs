@@ -37,7 +37,6 @@ namespace Inventra.Application.Services
 
             await _procurementRepository.AddAsync(procurement);
             await _productRepository.UpdateAsync(product);
-            await _procurementRepository.SaveChangesAsync();
 
             return procurement;
         }
