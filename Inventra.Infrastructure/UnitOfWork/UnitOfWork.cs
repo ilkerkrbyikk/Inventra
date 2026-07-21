@@ -1,95 +1,103 @@
 using Inventra.Application.Interfaces;
-using Inventra.Application.Features.StockTransfer.Validators;
-using Inventra.Domain.Entities;
 using Inventra.Infrastructure.Persistence;
 using Inventra.Infrastructure.Repositories;
 using Microsoft.EntityFrameworkCore.Storage;
 
 namespace Inventra.Infrastructure.UnitOfWork
 {
-    public class UnitOfWork : IUnitOfWork
+    /// <summary>
+    /// Unit of Work implementation for coordinating repository operations.
+    /// Ensures transactional consistency across multiple repositories.
+    /// </summary>
+    public class UnitOfWork : IUnitOfWork, IDisposable
     {
         private readonly DatabaseContext _context;
-        private IDbContextTransaction? _transaction;
 
-        private IProductRepository? _productRepository;
-        private IStockTransactionRepository? _stockTransactionRepository;
-        private IProcurementRepository? _procurementRepository;
-        private IGenericRepository<Branch>? _branchRepository;
-        private IGenericRepository<Warehouse>? _warehouseRepository;
-        private IGenericRepository<Supplier>? _supplierRepository;
+        private IProductRepository _productRepository;
+        //private IBranchRepository _branchRepository;
+        //private IWarehouseRepository _warehouseRepository;
+        //private ISupplierRepository _supplierRepository;
+        private IStockTransactionRepository _stockTransactionRepository;
+        private IProcurementRepository _procurementRepository;
+        private IAuditLogRepository _auditLogRepository;
 
+        /// <summary>
+        /// Initializes a new instance of the UnitOfWork class.
+        /// </summary>
+        /// <param name="context">Database context for repository operations.</param>
         public UnitOfWork(DatabaseContext context)
         {
-            _context = context;
+            _context = context ?? throw new ArgumentNullException(nameof(context));
         }
 
+        /// <summary>
+        /// Gets the product repository, creating it lazily on first access.
+        /// </summary>
         public IProductRepository Products
             => _productRepository ??= new ProductRepository(_context);
 
+        /// <summary>
+        /// Gets the branch repository, creating it lazily on first access.
+        /// </summary>
+        //public IBranchRepository Branches
+        //    => _branchRepository ??= new BranchRepository(_context);
+
+        /// <summary>
+        /// Gets the warehouse repository, creating it lazily on first access.
+        /// </summary>
+        //public IWarehouseRepository Warehouses
+        //    => _warehouseRepository ??= new WarehouseRepository(_context);
+
+        /// <summary>
+        /// Gets the supplier repository, creating it lazily on first access.
+        /// </summary>
+        //public ISupplierRepository Suppliers
+        //    => _supplierRepository ??= new SupplierRepository(_context);
+
+        /// <summary>
+        /// Gets the stock transaction repository, creating it lazily on first access.
+        /// </summary>
         public IStockTransactionRepository StockTransactions
             => _stockTransactionRepository ??= new StockTransactionRepository(_context);
 
+        /// <summary>
+        /// Gets the procurement repository, creating it lazily on first access.
+        /// </summary>
         public IProcurementRepository Procurements
             => _procurementRepository ??= new ProcurementRepository(_context);
 
-        public IGenericRepository<Branch> Branches
-            => _branchRepository ??= new GenericRepository<Branch>(_context);
+        /// <summary>
+        /// Gets the audit log repository, creating it lazily on first access.
+        /// </summary>
+        public IAuditLogRepository AuditLogs
+            => _auditLogRepository ??= new AuditLogRepository(_context);
 
-        public IGenericRepository<Warehouse> Warehouses
-            => _warehouseRepository ??= new GenericRepository<Warehouse>(_context);
-
-        public IGenericRepository<Supplier> Suppliers
-            => _supplierRepository ??= new GenericRepository<Supplier>(_context);
-
+        /// <summary>
+        /// Saves all pending changes to the database asynchronously.
+        /// Coordinates SaveChanges across all repositories.
+        /// </summary>
+        /// <returns>Number of entities changed in the database.</returns>
         public async Task<int> SaveChangesAsync()
-            => await _context.SaveChangesAsync();
-
-        public async Task BeginTransactionAsync()
-            => _transaction = await _context.Database.BeginTransactionAsync();
-
-        public async Task CommitTransactionAsync()
         {
-            if (_transaction == null)
-                throw new InvalidOperationException("No active transaction to commit.");
-
-            try
-            {
-                await SaveChangesAsync();
-                await _transaction.CommitAsync();
-            }
-            catch
-            {
-                await RollbackTransactionAsync();
-                throw;
-            }
-            finally
-            {
-                await _transaction.DisposeAsync();
-                    _transaction = null;
-            }
+            return await _context.SaveChangesAsync();
         }
 
-        public async Task RollbackTransactionAsync()
+        /// <summary>
+        /// Begins a new database transaction.
+        /// </summary>
+        /// <returns>A transaction object that can be committed or rolled back.</returns>
+        public async Task<IDbContextTransaction> BeginTransactionAsync()
         {
-            if (_transaction == null)
-                return;
-
-            try
-            {
-                await _transaction.RollbackAsync();
-            }
-            finally
-            {
-                await _transaction.DisposeAsync();
-                _transaction = null;
-            }
+            return await _context.Database.BeginTransactionAsync();
         }
 
+        /// <summary>
+        /// Disposes all resources held by the unit of work.
+        /// </summary>
         public void Dispose()
         {
-            _transaction?.Dispose();
-            _context.Dispose();
+            _context?.Dispose();
+            GC.SuppressFinalize(this);
         }
     }
 }
