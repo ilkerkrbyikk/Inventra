@@ -1,4 +1,6 @@
+using System.Linq.Expressions;
 using Inventra.Domain.Entities;
+using Inventra.Infrastructure.Persistence.Configurations;
 using Microsoft.EntityFrameworkCore;
 
 namespace Inventra.Infrastructure.Persistence
@@ -15,10 +17,31 @@ namespace Inventra.Infrastructure.Persistence
         public DbSet<Supplier> Suppliers { get; set; }
         public DbSet<StockTransaction> StockTransactions { get; set; }
         public DbSet<ProcurementRecord> ProcurementRecords { get; set; }
+        public DbSet<AuditLog> AuditLogs { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
             base.OnModelCreating(modelBuilder);
+
+            modelBuilder.ApplyConfiguration(new AuditLogConfiguration());
+
+            // Configure soft delete for all BaseEntity descendants
+            var baseEntityType = typeof(BaseEntity);
+            foreach (var entityType in modelBuilder.Model.GetEntityTypes()
+                .Where(e => baseEntityType.IsAssignableFrom(e.ClrType)))
+            {
+                modelBuilder.Entity(entityType.ClrType)
+                    .HasQueryFilter(BuildSoftDeleteFilter(entityType.ClrType));
+
+                // Add IsDeleted and DeletedAt properties if not already mapped
+                var isDeletedProperty = entityType.FindProperty(nameof(BaseEntity.IsDeleted));
+                if (isDeletedProperty != null)
+                    isDeletedProperty.SetDefaultValue(false);
+
+                var deletedAtProperty = entityType.FindProperty(nameof(BaseEntity.DeletedAt));
+                if (deletedAtProperty != null)
+                    deletedAtProperty.SetDefaultValue(null);
+            }
 
             modelBuilder.Entity<Product>(entity =>
             {
@@ -83,5 +106,17 @@ namespace Inventra.Infrastructure.Persistence
                 entity.Property(e => e.CreatedAt).HasDefaultValueSql("GETUTCDATE()");
             });
         }
+    
+
+    private static LambdaExpression BuildSoftDeleteFilter(Type entityType)
+        {
+            var parameter = Expression.Parameter(entityType, "e");
+            var isDeletedProperty = Expression.Property(parameter, nameof(BaseEntity.IsDeleted));
+            var filter = Expression.Equal(isDeletedProperty, Expression.Constant(false));
+            return Expression.Lambda(filter, parameter);
+        }
+
     }
 }
+
+
