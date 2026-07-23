@@ -2,7 +2,6 @@ using Inventra.Application;
 using Inventra.Infrastructure;
 using Inventra.Infrastructure.Persistence;
 using Inventra.WebAPI.Extensions;
-using Microsoft.Extensions.Logging;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -11,6 +10,10 @@ builder.Services
     .AddApplicationServices()
     .AddInfrastructureServices(builder.Configuration)
     .AddWebAPIServices();
+
+
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
@@ -26,6 +29,10 @@ using (var scope = app.Services.CreateScope())
 
 // Use WebAPI configuration (includes audit context middleware)
 app.UseWebAPIConfiguration(app.Environment);
+app.UseExceptionHandling();
+app.UseHttpsRedirection();
+
+
 
 app.MapControllers();
 
