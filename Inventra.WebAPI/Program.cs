@@ -1,9 +1,12 @@
 using Inventra.Application.Extensions;
 using Inventra.Infrastructure;
 using Inventra.Infrastructure.Extensions;
+using Inventra.Application.Interfaces;
 using Inventra.WebAPI.Extensions;
 using Inventra.WebAPI.Filters;
+using Inventra.WebAPI.Hubs;
 using Inventra.WebAPI.Middleware;
+using Inventra.WebAPI.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -30,6 +33,8 @@ builder.Services.AddControllers(options =>
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
+builder.Services.AddSignalR();
+builder.Services.AddScoped<IInventoryNotificationService, SignalRInventoryNotificationService>();
 
 // Add CORS
 builder.Services.AddCors(options =>
@@ -49,5 +54,6 @@ var app = builder.Build();
 app.UseWebAPIConfiguration(app.Environment);
 
 app.MapControllers();
+app.MapHub<InventoryNotificationHub>("/hubs/inventory-notifications");
 
 await app.RunAsync();
