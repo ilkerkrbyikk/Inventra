@@ -1,21 +1,37 @@
 using Inventra.Application.Interfaces;
-using Inventra.Domain.Entities;
+using Inventra.Infrastructure.Persistence;
 using Inventra.Infrastructure.Repositories;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Inventra.Infrastructure.Extensions
 {
+    /// <summary>
+    /// Extension methods for registering Infrastructure layer services in DI.
+    /// </summary>
     public static class ServiceCollectionExtensions
     {
         /// <summary>
-        /// Adds all repository registrations at once.
+        /// Adds Infrastructure layer services to the DI container.
+        /// Registers database context, repositories, and related services.
         /// </summary>
-        public static IServiceCollection AddRepositories(this IServiceCollection services)
+        public static IServiceCollection AddInfrastructureLayer(
+            this IServiceCollection services,
+            IConfiguration configuration)
         {
+            // Register database context
+            var connectionString = configuration.GetConnectionString("DefaultConnection");
+            services.AddDbContext<DatabaseContext>(options =>
+            {
+                options.UseSqlServer(connectionString);
+            });
+
+            // Register generic repository
             services.AddScoped(typeof(IGenericRepository<>), typeof(GenericRepository<>));
-            services.AddScoped<IProductRepository, ProductRepository>();
-            services.AddScoped<IStockTransactionRepository, StockTransactionRepository>();
-            services.AddScoped<IProcurementRepository, ProcurementRepository>();
+
+            // Register specific repositories
+            services.AddScoped<IAuditLogRepository, AuditLogRepository>();
 
             return services;
         }

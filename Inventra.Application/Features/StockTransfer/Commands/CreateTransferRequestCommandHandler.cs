@@ -1,36 +1,43 @@
 using Inventra.Application.Common.CQRS;
 using Inventra.Application.Common.Results;
-using Inventra.Application.Common.Validation;
 using Inventra.Application.Interfaces;
 using Inventra.Domain.Entities;
-using FluentValidation;
 
 namespace Inventra.Application.Features.StockTransfer.Commands
 {
+    /// <summary>
+    /// Handler for CreateTransferRequestCommand.
+    /// Creates a new stock transfer request and returns its ID.
+    /// Validation is performed by the ValidationBehavior pipeline before this handler executes.
+    /// </summary>
     public class CreateTransferRequestCommandHandler : ICommandHandler<CreateTransferRequestCommand, Guid>
     {
-        private readonly IUnitOfWork _unitOfWork;
-        private readonly IValidator<CreateTransferRequestCommand> _validator;
+        private readonly IGenericRepository<StockTransaction> _transactionRepository;
+        private readonly IGenericRepository<Product> _productRepository;
 
-        public CreateTransferRequestCommandHandler(IUnitOfWork unitOfWork, IValidator<CreateTransferRequestCommand> validator)
+        public CreateTransferRequestCommandHandler(
+            IGenericRepository<StockTransaction> transactionRepository,
+            IGenericRepository<Product> productRepository)
         {
-            _unitOfWork = unitOfWork;
-            _validator = validator;
+            _transactionRepository = transactionRepository;
+            _productRepository = productRepository;
         }
 
-        public async Task<Result<Guid>> Handle(CreateTransferRequestCommand request, CancellationToken cancellationToken)
+        public async Task<Result<Guid>> Handle(
+            CreateTransferRequestCommand request,
+            CancellationToken cancellationToken)
         {
-            var validationResult = await _validator.ValidateAsync(request, cancellationToken);
-            if (!validationResult.IsValid)
-                return Result.Failure<Guid>(validationResult.GetErrorMessages());
-
-            var product = await _unitOfWork.Products.GetByIdAsync(request.ProductId);
-            if (product == null)
+            // Validation is already done by ValidationBehavior
+            // Check if product exists
+            var product = await _productRepository.GetByIdAsync(request.ProductId, cancellationToken);
+            if (product is null)
                 return Result.Failure<Guid>("Product not found.");
 
+            // Check stock availability
             if (product.StockQuantity < request.Quantity)
                 return Result.Failure<Guid>("Insufficient stock in source warehouse.");
 
+            // Create transfer request
             var transaction = new StockTransaction
             {
                 Id = Guid.NewGuid(),
@@ -41,11 +48,11 @@ namespace Inventra.Application.Features.StockTransfer.Commands
                 TransferredQuantity = 0,
                 DefectiveQuantity = 0,
                 TransactionDate = DateTime.UtcNow,
-                Status = "Pending"
+                Status = "Pending",
+                Notes = string.Empty
             };
 
-            await _unitOfWork.StockTransactions.AddAsync(transaction);
-            await _unitOfWork.SaveChangesAsync();
+            await _transactionRepository.AddAsync(transaction, cancellationToken);
 
             return Result.Success(transaction.Id, "Transfer request created successfully.");
         }
