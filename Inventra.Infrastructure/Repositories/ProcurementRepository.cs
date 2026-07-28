@@ -12,6 +12,6 @@ namespace Inventra.Infrastructure.Repositories
         }
 
         public async Task<IEnumerable<ProcurementRecord>> GetByWarehouseAsync(Guid warehouseId)
-            => await _context.ProcurementRecords.Where(p => p.WarehouseId == warehouseId).ToListAsync();
+            => await Context.ProcurementRecords.Where(p => p.WarehouseId == warehouseId).ToListAsync();
     }
 }

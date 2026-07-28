@@ -37,6 +37,7 @@ namespace Inventra.Application.Features.Products.Commands
                 Barcode = request.Barcode,
                 Price = request.Price,
                 StockQuantity = request.StockQuantity,
+                CriticalStockThreshold = request.CriticalStockThreshold,
                 CreatedAt = DateTime.UtcNow,
                 IsDeleted = false
             };

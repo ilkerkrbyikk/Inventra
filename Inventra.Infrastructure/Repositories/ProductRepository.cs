@@ -12,6 +12,6 @@ namespace Inventra.Infrastructure.Repositories
         }
 
         public async Task<Product?> GetByBarcodeAsync(string barcode)
-            => await _context.Products.FirstOrDefaultAsync(p => p.Barcode == barcode);
+            => await Context.Products.FirstOrDefaultAsync(p => p.Barcode == barcode);
     }
 }

@@ -18,6 +18,7 @@ namespace Inventra.Infrastructure.Persistence
         public DbSet<StockTransaction> StockTransactions { get; set; }
         public DbSet<ProcurementRecord> ProcurementRecords { get; set; }
         public DbSet<AuditLog> AuditLogs { get; set; }
+        public DbSet<BranchInventoryRequest> BranchInventoryRequests { get; set; }
 
         protected override void OnModelCreating(ModelBuilder modelBuilder)
         {
