@@ -4,9 +4,9 @@ namespace Inventra.Application.Interfaces
     /// Defines the contract for pushing real-time inventory notifications
     /// to connected warehouse managers.
     ///
-    /// Implemented in the Infrastructure layer (SignalR).
-    /// Called from Application layer MediatR notification handlers.
-    /// This keeps the Application layer free of any SignalR / transport concerns.
+    /// Implemented in the Presentation layer.
+    /// Called by Application-layer MediatR notification handlers.
+    /// This keeps the Application layer free of SignalR and other transport concerns.
     /// </summary>
     public interface IInventoryNotificationService
     {
