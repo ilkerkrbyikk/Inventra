@@ -33,6 +33,10 @@ namespace Inventra.Infrastructure.Persistence.Configurations
                 .IsRequired()
                 .HasColumnName("StockQuantity");
 
+            builder.Property(p => p.CriticalStockThreshold)
+                .HasColumnName("CriticalStockThreshold")
+                .HasComment("Stock level at or below which a low-stock notification is triggered. Null means no threshold is configured.");
+
             builder.Property(p => p.CreatedAt)
                 .HasDefaultValueSql("GETUTCDATE()")
                 .HasColumnName("CreatedAt");

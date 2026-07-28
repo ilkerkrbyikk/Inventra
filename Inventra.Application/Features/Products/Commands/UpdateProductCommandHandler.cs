@@ -39,6 +39,9 @@ namespace Inventra.Application.Features.Products.Commands
             if (request.StockQuantity.HasValue)
                 product.StockQuantity = request.StockQuantity.Value;
 
+            if (request.CriticalStockThreshold.HasValue)
+                product.CriticalStockThreshold = request.CriticalStockThreshold.Value;
+
             product.UpdatedAt = DateTime.UtcNow;
 
             await _productRepository.UpdateAsync(product, cancellationToken);

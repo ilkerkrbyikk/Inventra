@@ -1,8 +1,8 @@
 using FluentValidation;
+using Inventra.Application.Common.Behaviors;
 using Inventra.Application.Common.CQRS;
 using Inventra.Application.Features.Procurement.Commands;
 using Inventra.Application.Features.StockTransfer.Commands;
-using Inventra.Application.Features.StockTransfer.Validators;
 using MediatR;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -17,7 +17,7 @@ namespace Inventra.Application
                 cfg.RegisterServicesFromAssembly(typeof(CreateProcurementCommand).Assembly));
 
             // Register FluentValidation validators from this assembly
-            services.AddValidatorsFromAssembly(typeof(CreateTransferRequestCommandValidator).Assembly);
+            services.AddValidatorsFromAssembly(typeof(DependencyInjection).Assembly);
 
             // Configure validation behavior
             services.AddScoped(typeof(IPipelineBehavior<,>), typeof(ValidationBehavior<,>));

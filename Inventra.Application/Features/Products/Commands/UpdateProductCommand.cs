@@ -10,5 +10,6 @@ namespace Inventra.Application.Features.Products.Commands
         Guid Id,
         string? Name,
         decimal? Price,
-        int? StockQuantity) : ICommand;
+        int? StockQuantity,
+        int? CriticalStockThreshold) : ICommand;
 }

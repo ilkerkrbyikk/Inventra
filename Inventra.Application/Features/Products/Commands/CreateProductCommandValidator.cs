@@ -29,6 +29,11 @@ namespace Inventra.Application.Features.Products.Commands
             RuleFor(x => x.StockQuantity)
                 .GreaterThanOrEqualTo(0)
                 .WithMessage("Stock quantity cannot be negative.");
+
+            RuleFor(x => x.CriticalStockThreshold)
+                .GreaterThanOrEqualTo(0)
+                .WithMessage("Critical stock threshold cannot be negative.")
+                .When(x => x.CriticalStockThreshold.HasValue);
         }
     }
 }

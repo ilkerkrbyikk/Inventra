@@ -16,7 +16,7 @@ builder.Services.AddLogging(config =>
 });
 
 // Add Application layer services (MediatR, validators, behaviors)
-builder.Services.AddApplicationLayer();
+builder.Services.AddApplicationLayer(builder.Configuration);
 
 // Add Infrastructure layer services (repositories, database, etc.)
 builder.Services.AddInfrastructureLayer(builder.Configuration);

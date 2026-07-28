@@ -12,10 +12,10 @@ namespace Inventra.Infrastructure.Repositories
         }
 
         public async Task<IEnumerable<StockTransaction>> GetByStatusAsync(string status)
-            => await _context.StockTransactions.Where(t => t.Status == status).ToListAsync();
+            => await Context.StockTransactions.Where(t => t.Status == status).ToListAsync();
 
         public async Task<IEnumerable<StockTransaction>> GetPendingTransfersAsync(Guid warehouseId)
-            => await _context.StockTransactions
+            => await Context.StockTransactions
                 .Where(t => t.ToWarehouseId == warehouseId && t.Status == "Pending")
                 .ToListAsync();
     }

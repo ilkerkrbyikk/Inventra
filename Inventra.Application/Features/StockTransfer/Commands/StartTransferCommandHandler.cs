@@ -1,7 +1,9 @@
 using Inventra.Application.Common.CQRS;
+using Inventra.Application.Common.Notifications;
 using Inventra.Application.Common.Results;
 using Inventra.Application.Interfaces;
 using Inventra.Domain.Entities;
+using MediatR;
 
 namespace Inventra.Application.Features.StockTransfer.Commands
 {
@@ -15,13 +17,16 @@ namespace Inventra.Application.Features.StockTransfer.Commands
     {
         private readonly IGenericRepository<StockTransaction> _transactionRepository;
         private readonly IGenericRepository<Product> _productRepository;
+        private readonly IPublisher _publisher;
 
         public StartTransferCommandHandler(
             IGenericRepository<StockTransaction> transactionRepository,
-            IGenericRepository<Product> productRepository)
+            IGenericRepository<Product> productRepository,
+            IPublisher publisher)
         {
             _transactionRepository = transactionRepository;
             _productRepository = productRepository;
+            _publisher = publisher;
         }
 
         public async Task<Result> Handle(
@@ -47,12 +52,27 @@ namespace Inventra.Application.Features.StockTransfer.Commands
                 return Result.Failure("Insufficient stock to complete transfer.");
 
             // Update stock and transaction status
+            var stockQuantityBeforeTransfer = product.StockQuantity;
             product.StockQuantity -= transaction.RequestedQuantity;
             transaction.Status = "InTransit";
             transaction.UpdatedAt = DateTime.UtcNow;
 
             await _productRepository.UpdateAsync(product, cancellationToken);
             await _transactionRepository.UpdateAsync(transaction, cancellationToken);
+
+            if (product.CriticalStockThreshold.HasValue &&
+                stockQuantityBeforeTransfer > product.CriticalStockThreshold.Value &&
+                product.StockQuantity <= product.CriticalStockThreshold.Value)
+            {
+                await _publisher.Publish(
+                    new LowStockDetectedNotification(
+                        product.Id,
+                        product.Name,
+                        product.StockQuantity,
+                        product.CriticalStockThreshold.Value,
+                        string.Empty),
+                    cancellationToken);
+            }
 
             return Result.Success("Transfer started successfully.");
         }

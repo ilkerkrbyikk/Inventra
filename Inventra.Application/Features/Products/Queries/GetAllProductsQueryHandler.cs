@@ -36,6 +36,7 @@ namespace Inventra.Application.Features.Products.Queries
                     p.Barcode,
                     p.Price,
                     p.StockQuantity,
+                    p.CriticalStockThreshold,
                     p.CreatedAt,
                     p.UpdatedAt))
                 .ToList();

@@ -82,7 +82,12 @@ namespace Inventra.WebAPI.Controllers
         public async Task<IActionResult> Update(Guid id, [FromBody] UpdateProductCommand command)
         {
             // Merge ID from route into command
-            var mergedCommand = new UpdateProductCommand(id, command.Name, command.Price, command.StockQuantity);
+            var mergedCommand = new UpdateProductCommand(
+                id,
+                command.Name,
+                command.Price,
+                command.StockQuantity,
+                command.CriticalStockThreshold);
             var result = await _mediator.Send(mergedCommand);
             return result.ToHttpResponse();
         }

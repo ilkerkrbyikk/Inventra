@@ -1,6 +1,8 @@
 using FluentValidation;
 using Inventra.Application.Common.Behaviors;
+using Inventra.Application.Common.Options;
 using MediatR;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Inventra.Application.Extensions
@@ -14,7 +16,9 @@ namespace Inventra.Application.Extensions
         /// Adds Application layer services to the DI container.
         /// Registers MediatR, validators, and pipeline behaviors.
         /// </summary>
-        public static IServiceCollection AddApplicationLayer(this IServiceCollection services)
+        public static IServiceCollection AddApplicationLayer(
+            this IServiceCollection services,
+            IConfiguration configuration)
         {
             // Register MediatR
             services.AddMediatR(config =>
@@ -29,6 +33,9 @@ namespace Inventra.Application.Extensions
 
             // Register all validators from this assembly
             services.AddValidatorsFromAssembly(typeof(ServiceCollectionExtensions).Assembly);
+
+            services.Configure<InventoryNotificationOptions>(
+                configuration.GetSection(InventoryNotificationOptions.SectionName));
 
             return services;
         }

@@ -10,6 +10,7 @@ namespace Inventra.Application.Features.Products.DTOs
         string Barcode,
         decimal Price,
         int StockQuantity,
+        int? CriticalStockThreshold,
         DateTime CreatedAt,
         DateTime? UpdatedAt);
 }

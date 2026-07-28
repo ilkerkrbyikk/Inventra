@@ -1,6 +1,7 @@
 using Inventra.Application.Interfaces;
 using Inventra.Infrastructure.Persistence;
 using Inventra.Infrastructure.Repositories;
+using Inventra.Infrastructure.UnitOfWork;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -32,6 +33,7 @@ namespace Inventra.Infrastructure.Extensions
 
             // Register specific repositories
             services.AddScoped<IAuditLogRepository, AuditLogRepository>();
+            services.AddScoped<IUnitOfWork, UnitOfWork.UnitOfWork>();
 
             return services;
         }

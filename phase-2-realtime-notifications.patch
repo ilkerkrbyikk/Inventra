@@ -1,0 +1,1221 @@
+From c881959318195a84bdb0cb805618bfbf65e5854d Mon Sep 17 00:00:00 2001
+From: Claude <claude@anthropic.com>
+Date: Tue, 28 Jul 2026 19:02:33 +0000
+Subject: [PATCH] =?UTF-8?q?feat:=20Phase=202=20=E2=80=94=20real-time=20not?=
+ =?UTF-8?q?ification=20abstractions=20+=20BranchInventoryRequest?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+## What this PR introduces
+
+### Domain Layer
+- BranchInventoryRequest entity (new aggregate)
+- BranchInventoryRequestStatus enum (Pending / Approved / Rejected / Fulfilled)
+- Product.CriticalStockThreshold (nullable int, per-product low-stock threshold)
+
+### Application Layer
+- IInventoryNotificationService interface (transport-agnostic, implemented in Phase 5)
+- LowStockDetectedNotification (MediatR INotification)
+- LargeInventoryRequestedNotification (MediatR INotification)
+- InventoryNotificationOptions (strongly-typed config, bound from appsettings.json)
+- Full CQRS slice for BranchInventoryRequest:
+  - CreateBranchInventoryRequestCommand
+  - CreateBranchInventoryRequestCommandValidator
+  - CreateBranchInventoryRequestCommandHandler
+  - BranchInventoryRequestDto
+- StartTransferCommandHandler: publishes LowStockDetectedNotification after stock deduction
+- CompleteTransferCommandHandler: publishes LowStockDetectedNotification after completion
+
+### Infrastructure Layer
+- BranchInventoryRequestConfiguration (EF Core Fluent API)
+- ProductConfiguration: added CriticalStockThreshold column mapping
+- DatabaseContext: added BranchInventoryRequests DbSet
+- Migration: AddBranchInventoryRequestsAndCriticalStockThreshold
+
+### WebAPI Layer
+- BranchInventoryRequestsController (POST endpoint)
+- appsettings.json: InventoryNotifications section with LargeRequestThreshold
+- Program.cs: passes IConfiguration to AddApplicationLayer
+- AddApplicationLayer signature updated to accept IConfiguration
+
+## Architecture notes
+- No SignalR yet — notification handlers will be added in Phase 5
+- LowStockDetectedNotification publishes with empty WarehouseManagerUserId;
+  user resolution will be implemented in Phase 5 (known limitation)
+- All Clean Architecture boundaries respected
+- No business logic in controllers or infrastructure
+---
+ .../LargeInventoryRequestedNotification.cs    |  31 +++++
+ .../LowStockDetectedNotification.cs           |  25 ++++
+ .../Options/InventoryNotificationOptions.cs   |  21 ++++
+ .../Extensions/ServiceCollectionExtensions.cs |  43 +++++++
+ .../CreateBranchInventoryRequestCommand.cs    |  24 ++++
+ ...ateBranchInventoryRequestCommandHandler.cs | 107 ++++++++++++++++++
+ ...eBranchInventoryRequestCommandValidator.cs |  41 +++++++
+ .../DTOs/BranchInventoryRequestDto.cs         |  24 ++++
+ .../CompleteTransferCommandHandler.cs         |  87 ++++++++++++++
+ .../Commands/StartTransferCommandHandler.cs   |  87 ++++++++++++++
+ .../IInventoryNotificationService.cs          |  47 ++++++++
+ .../Entities/BranchInventoryRequest.cs        |  58 ++++++++++
+ Inventra.Domain/Entities/Product.cs           |  17 +++
+ .../Enums/BranchInventoryRequestStatus.cs     |  28 +++++
+ ...entoryRequestsAndCriticalStockThreshold.cs |  80 +++++++++++++
+ .../BranchInventoryRequestConfiguration.cs    |  85 ++++++++++++++
+ .../Configurations/ProductConfiguration.cs    |  59 ++++++++++
+ .../Persistence/DatabaseContext.cs            |  29 +++++
+ .../BranchInventoryRequestsController.cs      |  40 +++++++
+ Inventra.WebAPI/Program.cs                    |  52 +++++++++
+ Inventra.WebAPI/appsettings.json              |  15 +++
+ 21 files changed, 1000 insertions(+)
+ create mode 100644 Inventra.Application/Common/Notifications/LargeInventoryRequestedNotification.cs
+ create mode 100644 Inventra.Application/Common/Notifications/LowStockDetectedNotification.cs
+ create mode 100644 Inventra.Application/Common/Options/InventoryNotificationOptions.cs
+ create mode 100644 Inventra.Application/Extensions/ServiceCollectionExtensions.cs
+ create mode 100644 Inventra.Application/Features/BranchInventoryRequests/Commands/CreateBranchInventoryRequestCommand.cs
+ create mode 100644 Inventra.Application/Features/BranchInventoryRequests/Commands/CreateBranchInventoryRequestCommandHandler.cs
+ create mode 100644 Inventra.Application/Features/BranchInventoryRequests/Commands/CreateBranchInventoryRequestCommandValidator.cs
+ create mode 100644 Inventra.Application/Features/BranchInventoryRequests/DTOs/BranchInventoryRequestDto.cs
+ create mode 100644 Inventra.Application/Features/StockTransfer/Commands/CompleteTransferCommandHandler.cs
+ create mode 100644 Inventra.Application/Features/StockTransfer/Commands/StartTransferCommandHandler.cs
+ create mode 100644 Inventra.Application/Interfaces/IInventoryNotificationService.cs
+ create mode 100644 Inventra.Domain/Entities/BranchInventoryRequest.cs
+ create mode 100644 Inventra.Domain/Entities/Product.cs
+ create mode 100644 Inventra.Domain/Enums/BranchInventoryRequestStatus.cs
+ create mode 100644 Inventra.Infrastructure/Migrations/20260728000000_AddBranchInventoryRequestsAndCriticalStockThreshold.cs
+ create mode 100644 Inventra.Infrastructure/Persistence/Configurations/BranchInventoryRequestConfiguration.cs
+ create mode 100644 Inventra.Infrastructure/Persistence/Configurations/ProductConfiguration.cs
+ create mode 100644 Inventra.Infrastructure/Persistence/DatabaseContext.cs
+ create mode 100644 Inventra.WebAPI/Controllers/BranchInventoryRequestsController.cs
+ create mode 100644 Inventra.WebAPI/Program.cs
+ create mode 100644 Inventra.WebAPI/appsettings.json
+
+diff --git a/Inventra.Application/Common/Notifications/LargeInventoryRequestedNotification.cs b/Inventra.Application/Common/Notifications/LargeInventoryRequestedNotification.cs
+new file mode 100644
+index 0000000..cded456
+--- /dev/null
++++ b/Inventra.Application/Common/Notifications/LargeInventoryRequestedNotification.cs
+@@ -0,0 +1,31 @@
++using MediatR;
++
++namespace Inventra.Application.Common.Notifications
++{
++    /// <summary>
++    /// Published when a branch submits an inventory request whose quantity
++    /// meets or exceeds the configured LargeRequestThreshold.
++    ///
++    /// Consumers of this notification are responsible for delivering
++    /// real-time alerts to the appropriate warehouse manager(s).
++    /// </summary>
++    /// <param name="RequestId">The ID of the newly created BranchInventoryRequest.</param>
++    /// <param name="BranchId">The branch that submitted the request.</param>
++    /// <param name="BranchName">Human-readable branch name for the notification message.</param>
++    /// <param name="ProductId">The product being requested.</param>
++    /// <param name="ProductName">Human-readable product name for the notification message.</param>
++    /// <param name="RequestedQuantity">The quantity the branch is requesting.</param>
++    /// <param name="LargeRequestThreshold">The configured threshold that was met or exceeded.</param>
++    /// <param name="WarehouseManagerUserId">
++    /// The user ID of the warehouse manager who should receive the notification.
++    /// </param>
++    public record LargeInventoryRequestedNotification(
++        Guid RequestId,
++        Guid BranchId,
++        string BranchName,
++        Guid ProductId,
++        string ProductName,
++        int RequestedQuantity,
++        int LargeRequestThreshold,
++        string WarehouseManagerUserId) : INotification;
++}
+diff --git a/Inventra.Application/Common/Notifications/LowStockDetectedNotification.cs b/Inventra.Application/Common/Notifications/LowStockDetectedNotification.cs
+new file mode 100644
+index 0000000..87c197d
+--- /dev/null
++++ b/Inventra.Application/Common/Notifications/LowStockDetectedNotification.cs
+@@ -0,0 +1,25 @@
++using MediatR;
++
++namespace Inventra.Application.Common.Notifications
++{
++    /// <summary>
++    /// Published when a product's stock quantity drops at or below its
++    /// configured CriticalStockThreshold after any stock-reducing operation.
++    ///
++    /// Consumers of this notification are responsible for delivering
++    /// real-time alerts to the appropriate warehouse manager(s).
++    /// </summary>
++    /// <param name="ProductId">The product whose stock has reached a critical level.</param>
++    /// <param name="ProductName">Human-readable product name for the notification message.</param>
++    /// <param name="CurrentStockQuantity">Stock quantity at the moment the threshold was crossed.</param>
++    /// <param name="CriticalStockThreshold">The configured threshold that was breached.</param>
++    /// <param name="WarehouseManagerUserId">
++    /// The user ID of the warehouse manager who should receive the notification.
++    /// </param>
++    public record LowStockDetectedNotification(
++        Guid ProductId,
++        string ProductName,
++        int CurrentStockQuantity,
++        int CriticalStockThreshold,
++        string WarehouseManagerUserId) : INotification;
++}
+diff --git a/Inventra.Application/Common/Options/InventoryNotificationOptions.cs b/Inventra.Application/Common/Options/InventoryNotificationOptions.cs
+new file mode 100644
+index 0000000..aea962e
+--- /dev/null
++++ b/Inventra.Application/Common/Options/InventoryNotificationOptions.cs
+@@ -0,0 +1,21 @@
++namespace Inventra.Application.Common.Options
++{
++    /// <summary>
++    /// Strongly-typed configuration options for inventory real-time notifications.
++    /// Bound from the "InventoryNotifications" section in appsettings.json.
++    /// </summary>
++    public class InventoryNotificationOptions
++    {
++        /// <summary>
++        /// The configuration section key used for binding.
++        /// </summary>
++        public const string SectionName = "InventoryNotifications";
++
++        /// <summary>
++        /// The minimum requested quantity that qualifies a branch inventory request
++        /// as "large" and triggers an immediate notification to the warehouse manager.
++        /// Defaults to 100 units.
++        /// </summary>
++        public int LargeRequestThreshold { get; set; } = 100;
++    }
++}
+diff --git a/Inventra.Application/Extensions/ServiceCollectionExtensions.cs b/Inventra.Application/Extensions/ServiceCollectionExtensions.cs
+new file mode 100644
+index 0000000..81f1830
+--- /dev/null
++++ b/Inventra.Application/Extensions/ServiceCollectionExtensions.cs
+@@ -0,0 +1,43 @@
++using FluentValidation;
++using Inventra.Application.Common.Behaviors;
++using Inventra.Application.Common.Options;
++using MediatR;
++using Microsoft.Extensions.Configuration;
++using Microsoft.Extensions.DependencyInjection;
++
++namespace Inventra.Application.Extensions
++{
++    /// <summary>
++    /// Extension methods for registering Application layer services in DI.
++    /// </summary>
++    public static class ServiceCollectionExtensions
++    {
++        /// <summary>
++        /// Adds Application layer services to the DI container.
++        /// Registers MediatR, validators, pipeline behaviors, and configuration options.
++        /// </summary>
++        public static IServiceCollection AddApplicationLayer(
++            this IServiceCollection services,
++            IConfiguration configuration)
++        {
++            // Register MediatR
++            services.AddMediatR(config =>
++            {
++                config.RegisterServicesFromAssembly(typeof(ServiceCollectionExtensions).Assembly);
++
++                // Pipeline behaviors — order matters: Logging first, then Validation
++                config.AddOpenBehavior(typeof(LoggingBehavior<,>));
++                config.AddOpenBehavior(typeof(ValidationBehavior<,>));
++            });
++
++            // Register all FluentValidation validators from this assembly
++            services.AddValidatorsFromAssembly(typeof(ServiceCollectionExtensions).Assembly);
++
++            // Register strongly-typed notification options
++            services.Configure<InventoryNotificationOptions>(
++                configuration.GetSection(InventoryNotificationOptions.SectionName));
++
++            return services;
++        }
++    }
++}
+diff --git a/Inventra.Application/Features/BranchInventoryRequests/Commands/CreateBranchInventoryRequestCommand.cs b/Inventra.Application/Features/BranchInventoryRequests/Commands/CreateBranchInventoryRequestCommand.cs
+new file mode 100644
+index 0000000..b015be5
+--- /dev/null
++++ b/Inventra.Application/Features/BranchInventoryRequests/Commands/CreateBranchInventoryRequestCommand.cs
+@@ -0,0 +1,24 @@
++using Inventra.Application.Common.CQRS;
++
++namespace Inventra.Application.Features.BranchInventoryRequests.Commands
++{
++    /// <summary>
++    /// Command to submit a new stock request from a branch to the warehouse.
++    /// Returns the ID of the created request.
++    ///
++    /// If the requested quantity meets or exceeds the configured LargeRequestThreshold,
++    /// a real-time notification is dispatched to the responsible warehouse manager.
++    /// </summary>
++    public record CreateBranchInventoryRequestCommand(
++        Guid BranchId,
++        Guid ProductId,
++        Guid WarehouseId,
++        int RequestedQuantity,
++        string? Notes,
++
++        /// <summary>
++        /// The user ID of the warehouse manager who should be notified
++        /// if this request qualifies as a large request.
++        /// </summary>
++        string WarehouseManagerUserId) : ICommand<Guid>;
++}
+diff --git a/Inventra.Application/Features/BranchInventoryRequests/Commands/CreateBranchInventoryRequestCommandHandler.cs b/Inventra.Application/Features/BranchInventoryRequests/Commands/CreateBranchInventoryRequestCommandHandler.cs
+new file mode 100644
+index 0000000..527fd08
+--- /dev/null
++++ b/Inventra.Application/Features/BranchInventoryRequests/Commands/CreateBranchInventoryRequestCommandHandler.cs
+@@ -0,0 +1,107 @@
++using Inventra.Application.Common.CQRS;
++using Inventra.Application.Common.Notifications;
++using Inventra.Application.Common.Options;
++using Inventra.Application.Common.Results;
++using Inventra.Application.Interfaces;
++using Inventra.Domain.Entities;
++using Inventra.Domain.Enums;
++using MediatR;
++using Microsoft.Extensions.Options;
++
++namespace Inventra.Application.Features.BranchInventoryRequests.Commands
++{
++    /// <summary>
++    /// Handler for CreateBranchInventoryRequestCommand.
++    ///
++    /// Responsibilities:
++    /// 1. Validate that the referenced branch, product, and warehouse exist.
++    /// 2. Persist the new BranchInventoryRequest with Pending status.
++    /// 3. If the requested quantity meets or exceeds LargeRequestThreshold,
++    ///    publish a LargeInventoryRequestedNotification via MediatR.
++    ///    The notification handler (Infrastructure) will push a SignalR message
++    ///    to the warehouse manager — this handler does not know about SignalR.
++    ///
++    /// Validation is performed by ValidationBehavior before this handler runs.
++    /// </summary>
++    public class CreateBranchInventoryRequestCommandHandler
++        : ICommandHandler<CreateBranchInventoryRequestCommand, Guid>
++    {
++        private readonly IGenericRepository<BranchInventoryRequest> _requestRepository;
++        private readonly IGenericRepository<Branch> _branchRepository;
++        private readonly IGenericRepository<Product> _productRepository;
++        private readonly IGenericRepository<Warehouse> _warehouseRepository;
++        private readonly IPublisher _publisher;
++        private readonly InventoryNotificationOptions _notificationOptions;
++
++        public CreateBranchInventoryRequestCommandHandler(
++            IGenericRepository<BranchInventoryRequest> requestRepository,
++            IGenericRepository<Branch> branchRepository,
++            IGenericRepository<Product> productRepository,
++            IGenericRepository<Warehouse> warehouseRepository,
++            IPublisher publisher,
++            IOptions<InventoryNotificationOptions> notificationOptions)
++        {
++            _requestRepository = requestRepository;
++            _branchRepository = branchRepository;
++            _productRepository = productRepository;
++            _warehouseRepository = warehouseRepository;
++            _publisher = publisher;
++            _notificationOptions = notificationOptions.Value;
++        }
++
++        public async Task<Result<Guid>> Handle(
++            CreateBranchInventoryRequestCommand request,
++            CancellationToken cancellationToken)
++        {
++            // --- Existence checks ---
++            var branch = await _branchRepository.GetByIdAsync(request.BranchId, cancellationToken);
++            if (branch is null)
++                return Result.Failure<Guid>("Branch not found.");
++
++            var product = await _productRepository.GetByIdAsync(request.ProductId, cancellationToken);
++            if (product is null)
++                return Result.Failure<Guid>("Product not found.");
++
++            var warehouse = await _warehouseRepository.GetByIdAsync(request.WarehouseId, cancellationToken);
++            if (warehouse is null)
++                return Result.Failure<Guid>("Warehouse not found.");
++
++            // --- Persist the request ---
++            var inventoryRequest = new BranchInventoryRequest
++            {
++                Id = Guid.NewGuid(),
++                BranchId = request.BranchId,
++                ProductId = request.ProductId,
++                WarehouseId = request.WarehouseId,
++                RequestedQuantity = request.RequestedQuantity,
++                Status = BranchInventoryRequestStatus.Pending,
++                Notes = request.Notes,
++                CreatedAt = DateTime.UtcNow,
++                IsDeleted = false
++            };
++
++            await _requestRepository.AddAsync(inventoryRequest, cancellationToken);
++
++            // --- Large request notification ---
++            // Business rule: if the quantity meets or exceeds the threshold,
++            // the warehouse manager must be notified immediately.
++            // We publish an application event — transport details are in Infrastructure.
++            if (request.RequestedQuantity >= _notificationOptions.LargeRequestThreshold)
++            {
++                var notification = new LargeInventoryRequestedNotification(
++                    RequestId: inventoryRequest.Id,
++                    BranchId: branch.Id,
++                    BranchName: branch.Name,
++                    ProductId: product.Id,
++                    ProductName: product.Name,
++                    RequestedQuantity: request.RequestedQuantity,
++                    LargeRequestThreshold: _notificationOptions.LargeRequestThreshold,
++                    WarehouseManagerUserId: request.WarehouseManagerUserId);
++
++                await _publisher.Publish(notification, cancellationToken);
++            }
++
++            return Result.Success(inventoryRequest.Id, "Branch inventory request created successfully.");
++        }
++    }
++}
+diff --git a/Inventra.Application/Features/BranchInventoryRequests/Commands/CreateBranchInventoryRequestCommandValidator.cs b/Inventra.Application/Features/BranchInventoryRequests/Commands/CreateBranchInventoryRequestCommandValidator.cs
+new file mode 100644
+index 0000000..d8f9514
+--- /dev/null
++++ b/Inventra.Application/Features/BranchInventoryRequests/Commands/CreateBranchInventoryRequestCommandValidator.cs
+@@ -0,0 +1,41 @@
++using FluentValidation;
++
++namespace Inventra.Application.Features.BranchInventoryRequests.Commands
++{
++    /// <summary>
++    /// Validator for CreateBranchInventoryRequestCommand.
++    /// Ensures all required fields are present and values are within acceptable ranges.
++    /// Executed automatically by the ValidationBehavior MediatR pipeline.
++    /// </summary>
++    public class CreateBranchInventoryRequestCommandValidator
++        : AbstractValidator<CreateBranchInventoryRequestCommand>
++    {
++        public CreateBranchInventoryRequestCommandValidator()
++        {
++            RuleFor(x => x.BranchId)
++                .NotEqual(Guid.Empty)
++                .WithMessage("Branch ID cannot be empty.");
++
++            RuleFor(x => x.ProductId)
++                .NotEqual(Guid.Empty)
++                .WithMessage("Product ID cannot be empty.");
++
++            RuleFor(x => x.WarehouseId)
++                .NotEqual(Guid.Empty)
++                .WithMessage("Warehouse ID cannot be empty.");
++
++            RuleFor(x => x.RequestedQuantity)
++                .GreaterThan(0)
++                .WithMessage("Requested quantity must be greater than zero.");
++
++            RuleFor(x => x.Notes)
++                .MaximumLength(500)
++                .WithMessage("Notes cannot exceed 500 characters.")
++                .When(x => x.Notes is not null);
++
++            RuleFor(x => x.WarehouseManagerUserId)
++                .NotEmpty()
++                .WithMessage("Warehouse manager user ID is required for notification routing.");
++        }
++    }
++}
+diff --git a/Inventra.Application/Features/BranchInventoryRequests/DTOs/BranchInventoryRequestDto.cs b/Inventra.Application/Features/BranchInventoryRequests/DTOs/BranchInventoryRequestDto.cs
+new file mode 100644
+index 0000000..8f3fff3
+--- /dev/null
++++ b/Inventra.Application/Features/BranchInventoryRequests/DTOs/BranchInventoryRequestDto.cs
+@@ -0,0 +1,24 @@
++using Inventra.Domain.Enums;
++
++namespace Inventra.Application.Features.BranchInventoryRequests.DTOs
++{
++    /// <summary>
++    /// Data Transfer Object for BranchInventoryRequest.
++    /// Used for returning request data in API responses.
++    /// </summary>
++    public record BranchInventoryRequestDto(
++        Guid Id,
++        Guid BranchId,
++        string BranchName,
++        Guid ProductId,
++        string ProductName,
++        Guid WarehouseId,
++        int RequestedQuantity,
++        BranchInventoryRequestStatus Status,
++        string? Notes,
++        string? ReviewNotes,
++        string? ReviewedByUserId,
++        DateTime? ReviewedAt,
++        DateTime CreatedAt,
++        DateTime? UpdatedAt);
++}
+diff --git a/Inventra.Application/Features/StockTransfer/Commands/CompleteTransferCommandHandler.cs b/Inventra.Application/Features/StockTransfer/Commands/CompleteTransferCommandHandler.cs
+new file mode 100644
+index 0000000..86fc6f3
+--- /dev/null
++++ b/Inventra.Application/Features/StockTransfer/Commands/CompleteTransferCommandHandler.cs
+@@ -0,0 +1,87 @@
++using FluentValidation;
++using Inventra.Application.Common.CQRS;
++using Inventra.Application.Common.Notifications;
++using Inventra.Application.Common.Results;
++using Inventra.Application.Common.Validation;
++using Inventra.Application.Interfaces;
++using MediatR;
++
++namespace Inventra.Application.Features.StockTransfer.Commands
++{
++    /// <summary>
++    /// Handler for CompleteTransferCommand.
++    /// Records transferred and defective quantities, updates product stock,
++    /// and transitions the transaction to Completed status.
++    ///
++    /// After updating stock, publishes a LowStockDetectedNotification
++    /// if the product's net stock falls at or below its CriticalStockThreshold.
++    /// </summary>
++    public class CompleteTransferCommandHandler : ICommandHandler<CompleteTransferCommand>
++    {
++        private readonly IUnitOfWork _unitOfWork;
++        private readonly IValidator<CompleteTransferCommand> _validator;
++        private readonly IPublisher _publisher;
++
++        public CompleteTransferCommandHandler(
++            IUnitOfWork unitOfWork,
++            IValidator<CompleteTransferCommand> validator,
++            IPublisher publisher)
++        {
++            _unitOfWork = unitOfWork;
++            _validator = validator;
++            _publisher = publisher;
++        }
++
++        public async Task<Result> Handle(CompleteTransferCommand request, CancellationToken cancellationToken)
++        {
++            var validationResult = await _validator.ValidateAsync(request, cancellationToken);
++            if (!validationResult.IsValid)
++                return Result.Failure(validationResult.GetErrorMessages());
++
++            var transaction = await _unitOfWork.StockTransactions.GetByIdAsync(request.TransactionId);
++            if (transaction == null)
++                return Result.Failure("Transaction not found.");
++
++            if (transaction.Status != "InTransit")
++                return Result.Failure("Only in-transit transfers can be completed.");
++
++            int totalReceived = request.TransferredQuantity + request.DefectiveQuantity;
++            if (totalReceived != transaction.RequestedQuantity)
++                return Result.Failure($"Total quantity mismatch. Expected {transaction.RequestedQuantity}, got {totalReceived}.");
++
++            var product = await _unitOfWork.Products.GetByIdAsync(transaction.ProductId);
++            if (product == null)
++                return Result.Failure("Product not found.");
++
++            // Only transferred (non-defective) units are added back to stock
++            product.StockQuantity += request.TransferredQuantity;
++            transaction.TransferredQuantity = request.TransferredQuantity;
++            transaction.DefectiveQuantity = request.DefectiveQuantity;
++            transaction.Status = "Completed";
++            transaction.Notes = request.Notes;
++            transaction.UpdatedAt = DateTime.UtcNow;
++
++            await _unitOfWork.Products.UpdateAsync(product);
++            await _unitOfWork.StockTransactions.UpdateAsync(transaction);
++            await _unitOfWork.SaveChangesAsync();
++
++            // --- Low stock notification ---
++            // Even after adding stock back, defective units may mean the net
++            // result is still below the critical threshold.
++            if (product.CriticalStockThreshold.HasValue &&
++                product.StockQuantity <= product.CriticalStockThreshold.Value)
++            {
++                var notification = new LowStockDetectedNotification(
++                    ProductId: product.Id,
++                    ProductName: product.Name,
++                    CurrentStockQuantity: product.StockQuantity,
++                    CriticalStockThreshold: product.CriticalStockThreshold.Value,
++                    WarehouseManagerUserId: string.Empty);
++
++                await _publisher.Publish(notification, cancellationToken);
++            }
++
++            return Result.Success("Transfer completed successfully.");
++        }
++    }
++}
+diff --git a/Inventra.Application/Features/StockTransfer/Commands/StartTransferCommandHandler.cs b/Inventra.Application/Features/StockTransfer/Commands/StartTransferCommandHandler.cs
+new file mode 100644
+index 0000000..8d7fcfa
+--- /dev/null
++++ b/Inventra.Application/Features/StockTransfer/Commands/StartTransferCommandHandler.cs
+@@ -0,0 +1,87 @@
++using Inventra.Application.Common.CQRS;
++using Inventra.Application.Common.Notifications;
++using Inventra.Application.Common.Results;
++using Inventra.Application.Interfaces;
++using Inventra.Domain.Entities;
++using MediatR;
++
++namespace Inventra.Application.Features.StockTransfer.Commands
++{
++    /// <summary>
++    /// Handler for StartTransferCommand.
++    /// Transitions a transfer request from Pending to InTransit status.
++    /// Updates the product's stock quantity accordingly.
++    ///
++    /// After deducting stock, publishes a LowStockDetectedNotification
++    /// if the product's stock falls at or below its CriticalStockThreshold.
++    /// The notification handler (Infrastructure) delivers the SignalR push —
++    /// this handler has no knowledge of transport details.
++    ///
++    /// Validation is performed by the ValidationBehavior pipeline before this handler executes.
++    /// </summary>
++    public class StartTransferCommandHandler : ICommandHandler<StartTransferCommand>
++    {
++        private readonly IGenericRepository<StockTransaction> _transactionRepository;
++        private readonly IGenericRepository<Product> _productRepository;
++        private readonly IPublisher _publisher;
++
++        public StartTransferCommandHandler(
++            IGenericRepository<StockTransaction> transactionRepository,
++            IGenericRepository<Product> productRepository,
++            IPublisher publisher)
++        {
++            _transactionRepository = transactionRepository;
++            _productRepository = productRepository;
++            _publisher = publisher;
++        }
++
++        public async Task<Result> Handle(
++            StartTransferCommand request,
++            CancellationToken cancellationToken)
++        {
++            var transaction = await _transactionRepository.GetByIdAsync(request.TransactionId, cancellationToken);
++            if (transaction is null)
++                return Result.Failure("Transfer request not found.");
++
++            if (transaction.Status != "Pending")
++                return Result.Failure("Only pending transfers can be started.");
++
++            var product = await _productRepository.GetByIdAsync(transaction.ProductId, cancellationToken);
++            if (product is null)
++                return Result.Failure("Product not found.");
++
++            if (product.StockQuantity < transaction.RequestedQuantity)
++                return Result.Failure("Insufficient stock to complete transfer.");
++
++            // Update stock and transaction status
++            product.StockQuantity -= transaction.RequestedQuantity;
++            transaction.Status = "InTransit";
++            transaction.UpdatedAt = DateTime.UtcNow;
++
++            await _productRepository.UpdateAsync(product, cancellationToken);
++            await _transactionRepository.UpdateAsync(transaction, cancellationToken);
++
++            // --- Low stock notification ---
++            // Business rule: after deducting stock, check if the product has crossed
++            // its configured critical threshold. If so, notify the warehouse manager.
++            // WarehouseManagerUserId is not stored on the transaction; in a future phase
++            // this will be resolved via a user-role lookup. For now, the notification
++            // is published with an empty userId — the handler will no-op gracefully.
++            // This is a known limitation documented for Phase 5.
++            if (product.CriticalStockThreshold.HasValue &&
++                product.StockQuantity <= product.CriticalStockThreshold.Value)
++            {
++                var notification = new LowStockDetectedNotification(
++                    ProductId: product.Id,
++                    ProductName: product.Name,
++                    CurrentStockQuantity: product.StockQuantity,
++                    CriticalStockThreshold: product.CriticalStockThreshold.Value,
++                    WarehouseManagerUserId: string.Empty);
++
++                await _publisher.Publish(notification, cancellationToken);
++            }
++
++            return Result.Success("Transfer started successfully.");
++        }
++    }
++}
+diff --git a/Inventra.Application/Interfaces/IInventoryNotificationService.cs b/Inventra.Application/Interfaces/IInventoryNotificationService.cs
+new file mode 100644
+index 0000000..bf8c592
+--- /dev/null
++++ b/Inventra.Application/Interfaces/IInventoryNotificationService.cs
+@@ -0,0 +1,47 @@
++namespace Inventra.Application.Interfaces
++{
++    /// <summary>
++    /// Defines the contract for pushing real-time inventory notifications
++    /// to connected warehouse managers.
++    ///
++    /// Implemented in the Infrastructure layer (SignalR).
++    /// Called from Application layer MediatR notification handlers.
++    /// This keeps the Application layer free of any SignalR / transport concerns.
++    /// </summary>
++    public interface IInventoryNotificationService
++    {
++        /// <summary>
++        /// Pushes a low-stock alert to the specified warehouse manager.
++        /// </summary>
++        /// <param name="userId">The user ID of the warehouse manager to notify.</param>
++        /// <param name="productId">The product that is critically low.</param>
++        /// <param name="productName">Human-readable product name.</param>
++        /// <param name="currentStock">Current stock level at the time of the alert.</param>
++        /// <param name="threshold">The configured critical threshold that was breached.</param>
++        /// <param name="cancellationToken">Cancellation token.</param>
++        Task NotifyLowStockAsync(
++            string userId,
++            Guid productId,
++            string productName,
++            int currentStock,
++            int threshold,
++            CancellationToken cancellationToken = default);
++
++        /// <summary>
++        /// Pushes a large-inventory-request alert to the specified warehouse manager.
++        /// </summary>
++        /// <param name="userId">The user ID of the warehouse manager to notify.</param>
++        /// <param name="requestId">The ID of the branch inventory request.</param>
++        /// <param name="branchName">Human-readable branch name.</param>
++        /// <param name="productName">Human-readable product name.</param>
++        /// <param name="requestedQuantity">The quantity requested by the branch.</param>
++        /// <param name="cancellationToken">Cancellation token.</param>
++        Task NotifyLargeInventoryRequestAsync(
++            string userId,
++            Guid requestId,
++            string branchName,
++            string productName,
++            int requestedQuantity,
++            CancellationToken cancellationToken = default);
++    }
++}
+diff --git a/Inventra.Domain/Entities/BranchInventoryRequest.cs b/Inventra.Domain/Entities/BranchInventoryRequest.cs
+new file mode 100644
+index 0000000..90dd871
+--- /dev/null
++++ b/Inventra.Domain/Entities/BranchInventoryRequest.cs
+@@ -0,0 +1,58 @@
++using Inventra.Domain.Enums;
++
++namespace Inventra.Domain.Entities
++{
++    /// <summary>
++    /// Represents a stock request submitted by a branch to the warehouse.
++    /// When the requested quantity exceeds the configured large-request threshold,
++    /// a real-time notification is dispatched to the warehouse manager.
++    /// </summary>
++    public class BranchInventoryRequest : BaseEntity
++    {
++        /// <summary>
++        /// The branch that submitted this request.
++        /// </summary>
++        public Guid BranchId { get; set; }
++
++        /// <summary>
++        /// The product being requested.
++        /// </summary>
++        public Guid ProductId { get; set; }
++
++        /// <summary>
++        /// The warehouse from which the stock is being requested.
++        /// </summary>
++        public Guid WarehouseId { get; set; }
++
++        /// <summary>
++        /// Number of units requested by the branch.
++        /// </summary>
++        public int RequestedQuantity { get; set; }
++
++        /// <summary>
++        /// Current lifecycle status of this request.
++        /// </summary>
++        public BranchInventoryRequestStatus Status { get; set; }
++
++        /// <summary>
++        /// Optional note from the branch manager explaining the urgency or context.
++        /// </summary>
++        public string? Notes { get; set; }
++
++        /// <summary>
++        /// Optional note from the warehouse manager when approving or rejecting.
++        /// </summary>
++        public string? ReviewNotes { get; set; }
++
++        /// <summary>
++        /// The user ID of the warehouse manager who reviewed this request.
++        /// Null until the request is reviewed.
++        /// </summary>
++        public string? ReviewedByUserId { get; set; }
++
++        /// <summary>
++        /// Timestamp when the request was reviewed. Null until reviewed.
++        /// </summary>
++        public DateTime? ReviewedAt { get; set; }
++    }
++}
+diff --git a/Inventra.Domain/Entities/Product.cs b/Inventra.Domain/Entities/Product.cs
+new file mode 100644
+index 0000000..e6d2171
+--- /dev/null
++++ b/Inventra.Domain/Entities/Product.cs
+@@ -0,0 +1,17 @@
++namespace Inventra.Domain.Entities
++{
++    public class Product : BaseEntity
++    {
++        public string Name { get; set; }
++        public string Barcode { get; set; }
++        public decimal Price { get; set; }
++        public int StockQuantity { get; set; }
++
++        /// <summary>
++        /// The stock level below which a low-stock notification is triggered.
++        /// Set per-product by the warehouse manager.
++        /// Null means no threshold is configured for this product — notifications will not fire.
++        /// </summary>
++        public int? CriticalStockThreshold { get; set; }
++    }
++}
+diff --git a/Inventra.Domain/Enums/BranchInventoryRequestStatus.cs b/Inventra.Domain/Enums/BranchInventoryRequestStatus.cs
+new file mode 100644
+index 0000000..3293e28
+--- /dev/null
++++ b/Inventra.Domain/Enums/BranchInventoryRequestStatus.cs
+@@ -0,0 +1,28 @@
++namespace Inventra.Domain.Enums
++{
++    /// <summary>
++    /// Represents the lifecycle status of a branch inventory request.
++    /// </summary>
++    public enum BranchInventoryRequestStatus
++    {
++        /// <summary>
++        /// Request has been submitted and is awaiting warehouse manager review.
++        /// </summary>
++        Pending = 0,
++
++        /// <summary>
++        /// Request has been approved by the warehouse manager.
++        /// </summary>
++        Approved = 1,
++
++        /// <summary>
++        /// Request has been rejected by the warehouse manager.
++        /// </summary>
++        Rejected = 2,
++
++        /// <summary>
++        /// Request has been fulfilled — stock has been dispatched to the branch.
++        /// </summary>
++        Fulfilled = 3
++    }
++}
+diff --git a/Inventra.Infrastructure/Migrations/20260728000000_AddBranchInventoryRequestsAndCriticalStockThreshold.cs b/Inventra.Infrastructure/Migrations/20260728000000_AddBranchInventoryRequestsAndCriticalStockThreshold.cs
+new file mode 100644
+index 0000000..2fa95cf
+--- /dev/null
++++ b/Inventra.Infrastructure/Migrations/20260728000000_AddBranchInventoryRequestsAndCriticalStockThreshold.cs
+@@ -0,0 +1,80 @@
++using System;
++using Microsoft.EntityFrameworkCore.Migrations;
++
++#nullable disable
++
++namespace Inventra.Infrastructure.Migrations
++{
++    /// <inheritdoc />
++    public partial class AddBranchInventoryRequestsAndCriticalStockThreshold : Migration
++    {
++        /// <inheritdoc />
++        protected override void Up(MigrationBuilder migrationBuilder)
++        {
++            // Add CriticalStockThreshold to Products
++            // Nullable: null means no threshold configured for that product
++            migrationBuilder.AddColumn<int>(
++                name: "CriticalStockThreshold",
++                table: "Products",
++                type: "int",
++                nullable: true,
++                comment: "Stock level at or below which a low-stock notification is triggered. Null = no threshold configured.");
++
++            // Create BranchInventoryRequests table
++            migrationBuilder.CreateTable(
++                name: "BranchInventoryRequests",
++                columns: table => new
++                {
++                    Id = table.Column<Guid>(type: "uniqueidentifier", nullable: false),
++                    BranchId = table.Column<Guid>(type: "uniqueidentifier", nullable: false),
++                    ProductId = table.Column<Guid>(type: "uniqueidentifier", nullable: false),
++                    WarehouseId = table.Column<Guid>(type: "uniqueidentifier", nullable: false),
++                    RequestedQuantity = table.Column<int>(type: "int", nullable: false),
++                    Status = table.Column<int>(type: "int", nullable: false),
++                    Notes = table.Column<string>(type: "nvarchar(500)", maxLength: 500, nullable: true),
++                    ReviewNotes = table.Column<string>(type: "nvarchar(500)", maxLength: 500, nullable: true),
++                    ReviewedByUserId = table.Column<string>(type: "nvarchar(255)", maxLength: 255, nullable: true),
++                    ReviewedAt = table.Column<DateTime>(type: "datetime2", nullable: true),
++                    CreatedAt = table.Column<DateTime>(type: "datetime2", nullable: false, defaultValueSql: "GETUTCDATE()"),
++                    UpdatedAt = table.Column<DateTime>(type: "datetime2", nullable: true),
++                    IsDeleted = table.Column<bool>(type: "bit", nullable: false, defaultValue: false),
++                    DeletedAt = table.Column<DateTime>(type: "datetime2", nullable: true)
++                },
++                constraints: table =>
++                {
++                    table.PrimaryKey("PK_BranchInventoryRequests", x => x.Id);
++                });
++
++            // Indexes
++            migrationBuilder.CreateIndex(
++                name: "IX_BranchInventoryRequests_BranchId",
++                table: "BranchInventoryRequests",
++                column: "BranchId");
++
++            migrationBuilder.CreateIndex(
++                name: "IX_BranchInventoryRequests_ProductId",
++                table: "BranchInventoryRequests",
++                column: "ProductId");
++
++            migrationBuilder.CreateIndex(
++                name: "IX_BranchInventoryRequests_Status",
++                table: "BranchInventoryRequests",
++                column: "Status");
++
++            migrationBuilder.CreateIndex(
++                name: "IX_BranchInventoryRequests_BranchId_Status",
++                table: "BranchInventoryRequests",
++                columns: new[] { "BranchId", "Status" });
++        }
++
++        /// <inheritdoc />
++        protected override void Down(MigrationBuilder migrationBuilder)
++        {
++            migrationBuilder.DropTable(name: "BranchInventoryRequests");
++
++            migrationBuilder.DropColumn(
++                name: "CriticalStockThreshold",
++                table: "Products");
++        }
++    }
++}
+diff --git a/Inventra.Infrastructure/Persistence/Configurations/BranchInventoryRequestConfiguration.cs b/Inventra.Infrastructure/Persistence/Configurations/BranchInventoryRequestConfiguration.cs
+new file mode 100644
+index 0000000..99f4cbc
+--- /dev/null
++++ b/Inventra.Infrastructure/Persistence/Configurations/BranchInventoryRequestConfiguration.cs
+@@ -0,0 +1,85 @@
++using Inventra.Domain.Entities;
++using Microsoft.EntityFrameworkCore;
++using Microsoft.EntityFrameworkCore.Metadata.Builders;
++
++namespace Inventra.Infrastructure.Persistence.Configurations
++{
++    /// <summary>
++    /// Entity Framework Core configuration for BranchInventoryRequest.
++    /// Fluent API only — no Data Annotations on the entity class.
++    /// </summary>
++    public class BranchInventoryRequestConfiguration : IEntityTypeConfiguration<BranchInventoryRequest>
++    {
++        public void Configure(EntityTypeBuilder<BranchInventoryRequest> builder)
++        {
++            builder.ToTable("BranchInventoryRequests");
++
++            builder.HasKey(r => r.Id);
++
++            builder.Property(r => r.BranchId)
++                .IsRequired()
++                .HasColumnName("BranchId");
++
++            builder.Property(r => r.ProductId)
++                .IsRequired()
++                .HasColumnName("ProductId");
++
++            builder.Property(r => r.WarehouseId)
++                .IsRequired()
++                .HasColumnName("WarehouseId");
++
++            builder.Property(r => r.RequestedQuantity)
++                .IsRequired()
++                .HasColumnName("RequestedQuantity");
++
++            builder.Property(r => r.Status)
++                .IsRequired()
++                .HasColumnName("Status");
++
++            builder.Property(r => r.Notes)
++                .HasMaxLength(500)
++                .HasColumnName("Notes");
++
++            builder.Property(r => r.ReviewNotes)
++                .HasMaxLength(500)
++                .HasColumnName("ReviewNotes");
++
++            builder.Property(r => r.ReviewedByUserId)
++                .HasMaxLength(255)
++                .HasColumnName("ReviewedByUserId");
++
++            builder.Property(r => r.ReviewedAt)
++                .HasColumnName("ReviewedAt");
++
++            builder.Property(r => r.CreatedAt)
++                .HasDefaultValueSql("GETUTCDATE()")
++                .HasColumnName("CreatedAt");
++
++            builder.Property(r => r.UpdatedAt)
++                .HasColumnName("UpdatedAt");
++
++            builder.Property(r => r.IsDeleted)
++                .HasDefaultValue(false)
++                .HasColumnName("IsDeleted");
++
++            builder.Property(r => r.DeletedAt)
++                .HasColumnName("DeletedAt");
++
++            // Soft delete global query filter
++            builder.HasQueryFilter(r => !r.IsDeleted);
++
++            // Indexes for common query patterns
++            builder.HasIndex(r => r.BranchId)
++                .HasDatabaseName("IX_BranchInventoryRequests_BranchId");
++
++            builder.HasIndex(r => r.ProductId)
++                .HasDatabaseName("IX_BranchInventoryRequests_ProductId");
++
++            builder.HasIndex(r => r.Status)
++                .HasDatabaseName("IX_BranchInventoryRequests_Status");
++
++            builder.HasIndex(r => new { r.BranchId, r.Status })
++                .HasDatabaseName("IX_BranchInventoryRequests_BranchId_Status");
++        }
++    }
++}
+diff --git a/Inventra.Infrastructure/Persistence/Configurations/ProductConfiguration.cs b/Inventra.Infrastructure/Persistence/Configurations/ProductConfiguration.cs
+new file mode 100644
+index 0000000..8ad754e
+--- /dev/null
++++ b/Inventra.Infrastructure/Persistence/Configurations/ProductConfiguration.cs
+@@ -0,0 +1,59 @@
++using Inventra.Domain.Entities;
++using Microsoft.EntityFrameworkCore;
++using Microsoft.EntityFrameworkCore.Metadata.Builders;
++
++namespace Inventra.Infrastructure.Persistence.Configurations
++{
++    public class ProductConfiguration : IEntityTypeConfiguration<Product>
++    {
++        public void Configure(EntityTypeBuilder<Product> builder)
++        {
++            builder.ToTable("Products");
++
++            builder.HasKey(p => p.Id);
++
++            builder.Property(p => p.Name)
++                .IsRequired()
++                .HasMaxLength(255)
++                .HasColumnName("Name");
++
++            builder.Property(p => p.Barcode)
++                .IsRequired()
++                .HasMaxLength(100)
++                .HasColumnName("Barcode");
++
++            builder.HasIndex(p => p.Barcode)
++                .IsUnique();
++
++            builder.Property(p => p.Price)
++                .HasPrecision(18, 2)
++                .HasColumnName("Price");
++
++            builder.Property(p => p.StockQuantity)
++                .IsRequired()
++                .HasColumnName("StockQuantity");
++
++            // Nullable — null means "no threshold configured for this product"
++            builder.Property(p => p.CriticalStockThreshold)
++                .IsRequired(false)
++                .HasColumnName("CriticalStockThreshold")
++                .HasComment("Stock level at or below which a low-stock notification is triggered. Null = no threshold configured.");
++
++            builder.Property(p => p.CreatedAt)
++                .HasDefaultValueSql("GETUTCDATE()")
++                .HasColumnName("CreatedAt");
++
++            builder.Property(p => p.UpdatedAt)
++                .HasColumnName("UpdatedAt");
++
++            builder.Property(p => p.IsDeleted)
++                .HasDefaultValue(false)
++                .HasColumnName("IsDeleted");
++
++            builder.Property(p => p.DeletedAt)
++                .HasColumnName("DeletedAt");
++
++            builder.HasQueryFilter(p => !p.IsDeleted);
++        }
++    }
++}
+diff --git a/Inventra.Infrastructure/Persistence/DatabaseContext.cs b/Inventra.Infrastructure/Persistence/DatabaseContext.cs
+new file mode 100644
+index 0000000..0646c70
+--- /dev/null
++++ b/Inventra.Infrastructure/Persistence/DatabaseContext.cs
+@@ -0,0 +1,29 @@
++using Inventra.Domain.Entities;
++using Microsoft.EntityFrameworkCore;
++
++namespace Inventra.Infrastructure.Persistence
++{
++    public class DatabaseContext : DbContext
++    {
++        public DatabaseContext(DbContextOptions<DatabaseContext> options) : base(options)
++        {
++        }
++
++        public DbSet<Product> Products { get; set; }
++        public DbSet<Branch> Branches { get; set; }
++        public DbSet<Warehouse> Warehouses { get; set; }
++        public DbSet<Supplier> Suppliers { get; set; }
++        public DbSet<StockTransaction> StockTransactions { get; set; }
++        public DbSet<ProcurementRecord> ProcurementRecords { get; set; }
++        public DbSet<AuditLog> AuditLogs { get; set; }
++        public DbSet<BranchInventoryRequest> BranchInventoryRequests { get; set; }
++
++        protected override void OnModelCreating(ModelBuilder modelBuilder)
++        {
++            base.OnModelCreating(modelBuilder);
++
++            // Apply all entity configurations from this assembly
++            modelBuilder.ApplyConfigurationsFromAssembly(typeof(DatabaseContext).Assembly);
++        }
++    }
++}
+diff --git a/Inventra.WebAPI/Controllers/BranchInventoryRequestsController.cs b/Inventra.WebAPI/Controllers/BranchInventoryRequestsController.cs
+new file mode 100644
+index 0000000..151211a
+--- /dev/null
++++ b/Inventra.WebAPI/Controllers/BranchInventoryRequestsController.cs
+@@ -0,0 +1,40 @@
++using Inventra.Application.Features.BranchInventoryRequests.Commands;
++using Inventra.WebAPI.Extensions;
++using MediatR;
++using Microsoft.AspNetCore.Mvc;
++
++namespace Inventra.WebAPI.Controllers
++{
++    /// <summary>
++    /// API Controller for branch inventory request operations.
++    ///
++    /// A branch inventory request is a formal stock request from a branch to a warehouse.
++    /// If the requested quantity meets or exceeds the configured large-request threshold,
++    /// the warehouse manager is notified in real time via SignalR (wired in a later phase).
++    /// </summary>
++    [ApiController]
++    [Route("api/[controller]")]
++    public class BranchInventoryRequestsController : ControllerBase
++    {
++        private readonly IMediator _mediator;
++
++        public BranchInventoryRequestsController(IMediator mediator)
++        {
++            _mediator = mediator;
++        }
++
++        /// <summary>
++        /// Submit a new stock request from a branch to the warehouse.
++        /// </summary>
++        /// <param name="command">Request details including branch, product, warehouse, and quantity.</param>
++        /// <returns>201 Created with the new request ID, or 400 Bad Request on validation failure.</returns>
++        [HttpPost]
++        [ProducesResponseType(StatusCodes.Status201Created)]
++        [ProducesResponseType(StatusCodes.Status400BadRequest)]
++        public async Task<IActionResult> Create([FromBody] CreateBranchInventoryRequestCommand command)
++        {
++            var result = await _mediator.Send(command);
++            return result.ToHttpResponse(StatusCodes.Status201Created);
++        }
++    }
++}
+diff --git a/Inventra.WebAPI/Program.cs b/Inventra.WebAPI/Program.cs
+new file mode 100644
+index 0000000..93eea49
+--- /dev/null
++++ b/Inventra.WebAPI/Program.cs
+@@ -0,0 +1,52 @@
++using Inventra.Application.Extensions;
++using Inventra.Infrastructure.Extensions;
++using Inventra.WebAPI.Extensions;
++using Inventra.WebAPI.Filters;
++using Inventra.WebAPI.Middleware;
++
++var builder = WebApplication.CreateBuilder(args);
++
++// Add logging
++builder.Services.AddLogging(config =>
++{
++    config.ClearProviders();
++    config.AddConsole();
++    config.AddDebug();
++});
++
++// Add Application layer services (MediatR, validators, behaviors, options)
++builder.Services.AddApplicationLayer(builder.Configuration);
++
++// Add Infrastructure layer services (repositories, database, etc.)
++builder.Services.AddInfrastructureLayer(builder.Configuration);
++
++// Add API layer services
++builder.Services.AddControllers(options =>
++{
++    // Register global exception filter
++    options.Filters.Add<GlobalExceptionFilter>();
++});
++
++builder.Services.AddEndpointsApiExplorer();
++builder.Services.AddSwaggerGen();
++
++// Add CORS
++builder.Services.AddCors(options =>
++{
++    options.AddPolicy("AllowAll", policy =>
++    {
++        policy
++            .AllowAnyOrigin()
++            .AllowAnyMethod()
++            .AllowAnyHeader();
++    });
++});
++
++var app = builder.Build();
++
++// Configure request pipeline
++app.UseWebAPIConfiguration(app.Environment);
++
++app.MapControllers();
++
++await app.RunAsync();
+diff --git a/Inventra.WebAPI/appsettings.json b/Inventra.WebAPI/appsettings.json
+new file mode 100644
+index 0000000..bd69192
+--- /dev/null
++++ b/Inventra.WebAPI/appsettings.json
+@@ -0,0 +1,15 @@
++{
++  "Logging": {
++    "LogLevel": {
++      "Default": "Information",
++      "Microsoft.EntityFrameworkCore": "Information"
++    }
++  },
++  "ConnectionStrings": {
++    "DefaultConnection": "Server=(localdb)\\mssqllocaldb;Database=InventraDB;Trusted_Connection=true;MultipleActiveResultSets=true;"
++  },
++  "InventoryNotifications": {
++    "LargeRequestThreshold": 100
++  },
++  "AllowedHosts": "*"
++}
+-- 
+2.43.0
+

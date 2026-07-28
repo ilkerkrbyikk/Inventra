@@ -36,6 +36,7 @@ namespace Inventra.Application.Features.Products.Queries
                 product.Barcode,
                 product.Price,
                 product.StockQuantity,
+                product.CriticalStockThreshold,
                 product.CreatedAt,
                 product.UpdatedAt);
 
