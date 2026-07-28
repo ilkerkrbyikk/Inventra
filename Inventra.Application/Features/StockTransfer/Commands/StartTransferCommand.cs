@@ -2,8 +2,8 @@ using Inventra.Application.Common.CQRS;
 
 namespace Inventra.Application.Features.StockTransfer.Commands
 {
-    public class StartTransferCommand : ICommand
-    {
-        public Guid TransactionId { get; set; }
-    }
+    /// <summary>
+    /// Command to start a pending stock transfer.
+    /// </summary>
+    public record StartTransferCommand(Guid TransactionId) : ICommand;
 }

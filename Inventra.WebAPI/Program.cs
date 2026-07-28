@@ -1,32 +1,53 @@
-using Inventra.Application;
+using Inventra.Application.Extensions;
 using Inventra.Infrastructure;
-using Inventra.Infrastructure.Persistence;
+using Inventra.Infrastructure.Extensions;
 using Inventra.WebAPI.Extensions;
-using Microsoft.Extensions.Logging;
+using Inventra.WebAPI.Filters;
+using Inventra.WebAPI.Middleware;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services from all layers
-builder.Services
-    .AddApplicationServices()
-    .AddInfrastructureServices(builder.Configuration)
-    .AddWebAPIServices();
+// Add logging
+builder.Services.AddLogging(config =>
+{
+    config.ClearProviders();
+    config.AddConsole();
+    config.AddDebug();
+});
+
+// Add Application layer services (MediatR, validators, behaviors)
+builder.Services.AddApplicationLayer();
+
+// Add Infrastructure layer services (repositories, database, etc.)
+builder.Services.AddInfrastructureLayer(builder.Configuration);
+
+// Add API layer services
+builder.Services.AddControllers(options =>
+{
+    // Register global exception filter
+    options.Filters.Add<GlobalExceptionFilter>();
+});
+
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen();
+
+// Add CORS
+builder.Services.AddCors(options =>
+{
+    options.AddPolicy("AllowAll", policy =>
+    {
+        policy
+            .AllowAnyOrigin()
+            .AllowAnyMethod()
+            .AllowAnyHeader();
+    });
+});
 
 var app = builder.Build();
 
-// Initialize database
-using (var scope = app.Services.CreateScope())
-{
-    var services = scope.ServiceProvider;
-    var context = services.GetRequiredService<DatabaseContext>();
-    var logger = services.GetRequiredService<ILogger<DatabaseContext>>();
-
-    await DatabaseInitializer.InitializeAsync(context, logger);
-}
-
-// Use WebAPI configuration (includes audit context middleware)
+// Configure request pipeline
 app.UseWebAPIConfiguration(app.Environment);
 
 app.MapControllers();
 
-app.Run();
+await app.RunAsync();

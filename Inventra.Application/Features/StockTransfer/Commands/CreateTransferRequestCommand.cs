@@ -2,11 +2,13 @@ using Inventra.Application.Common.CQRS;
 
 namespace Inventra.Application.Features.StockTransfer.Commands
 {
-    public class CreateTransferRequestCommand : ICommand<Guid>
-    {
-        public Guid ProductId { get; set; }
-        public Guid FromWarehouseId { get; set; }
-        public Guid ToWarehouseId { get; set; }
-        public int Quantity { get; set; }
-    }
+    /// <summary>
+    /// Command to create a new stock transfer request.
+    /// Returns the ID of the created transfer request.
+    /// </summary>
+    public record CreateTransferRequestCommand(
+        Guid ProductId,
+        Guid FromWarehouseId,
+        Guid ToWarehouseId,
+        int Quantity) : ICommand<Guid>;
 }

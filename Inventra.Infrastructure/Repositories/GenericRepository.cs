@@ -4,42 +4,86 @@ using Microsoft.EntityFrameworkCore;
 
 namespace Inventra.Infrastructure.Repositories
 {
-    public class GenericRepository<T> : IGenericRepository<T> where T : class
+    /// <summary>
+    /// Generic repository implementation for data access operations.
+    /// Provides CRUD operations and integrates with Entity Framework Core.
+    /// </summary>
+    /// <typeparam name="TEntity">The entity type.</typeparam>
+    public class GenericRepository<TEntity> : IGenericRepository<TEntity> where TEntity : class
     {
-        protected readonly DatabaseContext _context;
+        protected readonly DatabaseContext Context;
+        protected readonly DbSet<TEntity> DbSet;
 
         public GenericRepository(DatabaseContext context)
         {
-            _context = context;
+            Context = context;
+            DbSet = context.Set<TEntity>();
         }
 
-        public async Task<T?> GetByIdAsync(Guid id)
-            => await _context.Set<T>().FindAsync(id);
-
-        public async Task<IEnumerable<T>> GetAllAsync()
-            => await _context.Set<T>().ToListAsync();
-
-        public async Task<IEnumerable<T>> FindAsync(Func<T, bool> predicate)
-            => await Task.FromResult(_context.Set<T>().Where(predicate).ToList());
-
-        public async Task AddAsync(T entity)
+        /// <inheritdoc />
+        public virtual async Task<TEntity?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default)
         {
-            await _context.Set<T>().AddAsync(entity);
+            return await DbSet.FindAsync(new object[] { id }, cancellationToken: cancellationToken);
         }
 
-        public async Task UpdateAsync(T entity)
+        /// <inheritdoc />
+        public virtual async Task<IEnumerable<TEntity>> GetAllAsync(CancellationToken cancellationToken = default)
         {
-            _context.Set<T>().Update(entity);
-            await Task.CompletedTask;
+            return await DbSet.ToListAsync(cancellationToken);
         }
 
-        public async Task DeleteAsync(T entity)
+        /// <inheritdoc />
+        public virtual async Task<IEnumerable<TEntity>> GetByPredicateAsync(Func<TEntity, bool> predicate, CancellationToken cancellationToken = default)
         {
-            _context.Set<T>().Remove(entity);
-            await Task.CompletedTask;
+            return await Task.FromResult(DbSet.Where(predicate).ToList());
         }
 
-        public async Task<bool> ExistsAsync(Guid id)
-            => await _context.Set<T>().FindAsync(id) != null;
+        /// <inheritdoc />
+        public virtual async Task AddAsync(TEntity entity, CancellationToken cancellationToken = default)
+        {
+            await DbSet.AddAsync(entity, cancellationToken);
+            await Context.SaveChangesAsync(cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public virtual async Task AddRangeAsync(IEnumerable<TEntity> entities, CancellationToken cancellationToken = default)
+        {
+            await DbSet.AddRangeAsync(entities, cancellationToken);
+            await Context.SaveChangesAsync(cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public virtual async Task UpdateAsync(TEntity entity, CancellationToken cancellationToken = default)
+        {
+            DbSet.Update(entity);
+            await Context.SaveChangesAsync(cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public virtual async Task DeleteAsync(TEntity entity, CancellationToken cancellationToken = default)
+        {
+            DbSet.Remove(entity);
+            await Context.SaveChangesAsync(cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public virtual async Task DeleteRangeAsync(IEnumerable<TEntity> entities, CancellationToken cancellationToken = default)
+        {
+            DbSet.RemoveRange(entities);
+            await Context.SaveChangesAsync(cancellationToken);
+        }
+
+        /// <inheritdoc />
+        public virtual async Task<bool> ExistsAsync(Guid id, CancellationToken cancellationToken = default)
+        {
+            var entity = await GetByIdAsync(id, cancellationToken);
+            return entity is not null;
+        }
+
+        /// <inheritdoc />
+        public virtual async Task<int> CountAsync(CancellationToken cancellationToken = default)
+        {
+            return await DbSet.CountAsync(cancellationToken);
+        }
     }
 }

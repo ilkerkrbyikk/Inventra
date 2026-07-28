@@ -8,8 +8,8 @@ namespace Inventra.WebAPI.Extensions
     public static class ApplicationBuilderExtensions
     {
         /// <summary>
-        /// Uses WebAPI middleware and configuration.
-        /// Sets up audit context middleware, Swagger, and other pipeline components.
+        /// Configures the HTTP request pipeline with all necessary middleware and routes.
+        /// Sets up audit context, Swagger, CORS, authentication, and routing.
         /// </summary>
         /// <param name="app">Application builder.</param>
         /// <param name="environment">Hosting environment.</param>
@@ -18,7 +18,7 @@ namespace Inventra.WebAPI.Extensions
             this IApplicationBuilder app,
             IHostEnvironment environment)
         {
-            // Add audit context middleware early in the pipeline
+            // Audit context middleware captures user and IP info
             app.UseMiddleware<AuditContextMiddleware>();
 
             if (environment.IsDevelopment())
@@ -33,7 +33,7 @@ namespace Inventra.WebAPI.Extensions
             app.UseHttpsRedirection();
             app.UseRouting();
 
-            // Add CORS
+            // CORS must be before auth
             app.UseCors("AllowAll");
 
             app.UseAuthentication();

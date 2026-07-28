@@ -1,46 +1,58 @@
 using Inventra.Application.Common.CQRS;
 using Inventra.Application.Common.Results;
-using Inventra.Application.Common.Validation;
 using Inventra.Application.Interfaces;
-using FluentValidation;
+using Inventra.Domain.Entities;
 
 namespace Inventra.Application.Features.StockTransfer.Commands
 {
+    /// <summary>
+    /// Handler for StartTransferCommand.
+    /// Transitions a transfer request from Pending to InTransit status.
+    /// Updates the product's stock quantity accordingly.
+    /// Validation is performed by the ValidationBehavior pipeline before this handler executes.
+    /// </summary>
     public class StartTransferCommandHandler : ICommandHandler<StartTransferCommand>
     {
-        private readonly IUnitOfWork _unitOfWork;
-        private readonly IValidator<StartTransferCommand> _validator;
+        private readonly IGenericRepository<StockTransaction> _transactionRepository;
+        private readonly IGenericRepository<Product> _productRepository;
 
-        public StartTransferCommandHandler(IUnitOfWork unitOfWork, IValidator<StartTransferCommand> validator)
+        public StartTransferCommandHandler(
+            IGenericRepository<StockTransaction> transactionRepository,
+            IGenericRepository<Product> productRepository)
         {
-            _unitOfWork = unitOfWork;
-            _validator = validator;
+            _transactionRepository = transactionRepository;
+            _productRepository = productRepository;
         }
 
-        public async Task<Result> Handle(StartTransferCommand request, CancellationToken cancellationToken)
+        public async Task<Result> Handle(
+            StartTransferCommand request,
+            CancellationToken cancellationToken)
         {
-            var validationResult = await _validator.ValidateAsync(request, cancellationToken);
-            if (!validationResult.IsValid)
-                return Result.Failure(validationResult.GetErrorMessages());
+            // Validation is already done by ValidationBehavior
+            // Get transaction
+            var transaction = await _transactionRepository.GetByIdAsync(request.TransactionId, cancellationToken);
+            if (transaction is null)
+                return Result.Failure("Transfer request not found.");
 
-            var transaction = await _unitOfWork.StockTransactions.GetByIdAsync(request.TransactionId);
-            if (transaction == null)
-                return Result.Failure("Transaction not found.");
-
+            // Check if status is Pending
             if (transaction.Status != "Pending")
                 return Result.Failure("Only pending transfers can be started.");
 
-            var product = await _unitOfWork.Products.GetByIdAsync(transaction.ProductId);
-            if (product == null)
+            // Get product to verify stock
+            var product = await _productRepository.GetByIdAsync(transaction.ProductId, cancellationToken);
+            if (product is null)
                 return Result.Failure("Product not found.");
 
+            if (product.StockQuantity < transaction.RequestedQuantity)
+                return Result.Failure("Insufficient stock to complete transfer.");
+
+            // Update stock and transaction status
             product.StockQuantity -= transaction.RequestedQuantity;
             transaction.Status = "InTransit";
             transaction.UpdatedAt = DateTime.UtcNow;
 
-            await _unitOfWork.Products.UpdateAsync(product);
-            await _unitOfWork.StockTransactions.UpdateAsync(transaction);
-            await _unitOfWork.SaveChangesAsync();
+            await _productRepository.UpdateAsync(product, cancellationToken);
+            await _transactionRepository.UpdateAsync(transaction, cancellationToken);
 
             return Result.Success("Transfer started successfully.");
         }
